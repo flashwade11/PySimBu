@@ -5,8 +5,6 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 
-from src.dataset import generate_anndata
-
 
 def simulate_sample(
     dataset: ad.AnnData,
@@ -56,7 +54,7 @@ def simulate_bulk(
     balance_even_mirror_scenario = 0.01,
     n_jobs: int = 16,
     verbose: int = 1
-):
+) -> dict[str, pd.DataFrame]:
     all_types = np.unique(dataset.obs.cell_type.values).tolist()
     n_cell_types = len(all_types)
     simulation_vector_list = []
@@ -108,6 +106,9 @@ def simulate_bulk(
         ) for _, sample_vector in simulation_vector.iterrows()
     )
     bulk_counts = pd.concat(bulk_counts)
-    bulk_counts.index = [f"sample_{i+1}" for i in range(nsamples)]
+    bulk_counts.index = [f"{scenario}_sample_{i+1}" for i in range(nsamples)]
     
-    return bulk_counts
+    return dict(
+        bulk=bulk_counts,
+        proportions=simulation_vector
+    )
