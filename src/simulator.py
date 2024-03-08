@@ -81,7 +81,7 @@ def simulate_bulk(
         random_cell_types.remove(weighted_cell_type)
         random_cell_types.insert(0, weighted_cell_type)
         for _ in range(nsamples):
-            noise =  np.random.uniform(0, 0.01, size=1)
+            noise =  np.random.uniform(-0.01, 0.01, size=1)
             vector = np.round(np.random.uniform(0, 1, size=n_cell_types-1), 3)
             vector = (1 - weighted_amount - noise) * vector / np.sum(vector)
             vector = np.insert(vector, 0, weighted_amount + noise) 
