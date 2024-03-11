@@ -16,7 +16,7 @@ def simulate_sample(
     # remove_bias_in_counts_method: str,
     # norm_counts,
     # seed: int = 42
-) -> pd.DataFrame: 
+) -> dict[str, pd.DataFrame]: 
     if not np.round(sample_vector.sum(), 5) == 1:
         raise ValueError(f"simulation_vector must sum up to 1 in each sample, but got {sample_vector.sum()}.")
 
@@ -38,8 +38,23 @@ def simulate_sample(
     sampled_cells_ID = np.concatenate(sampled_cells_ID)
     sampled_cells_adata = dataset[sampled_cells_ID]
     
-    simulated_count_vector = sampled_cells_adata.to_df().sum(axis=0).to_frame().T
-    return simulated_count_vector
+    sampled_cells_df = sampled_cells_adata.to_df()
+    simulated_count_vector = sampled_cells_df.sum(axis=0).to_frame().T
+    
+    sampled_cell_type = dataset.obs.loc[sampled_cells_ID, "cell_type"].to_dict()
+    simulated_cell_type_expression = (
+        sampled_cells_df
+        .reset_index()
+        .replace({"cell_ID": sampled_cell_type})
+        .rename(columns={"cell_ID": "cell_type"})
+        .groupby("cell_type")
+        .sum()
+    )
+    
+    return dict(
+        bulk=simulated_count_vector,
+        cell_type_expression=simulated_cell_type_expression
+    )
 
 
 def simulate_bulk(
@@ -100,15 +115,19 @@ def simulate_bulk(
         raise ValueError("Scenario must be either 'even', 'random', 'weighted', or 'custom'")  
     # scaling_vector = np.ones(adata.shape[0])
     
-    bulk_counts = Parallel(n_jobs=n_jobs, verbose=verbose)(
+    simulation_results = Parallel(n_jobs=n_jobs, verbose=verbose)(
         delayed(simulate_sample)(
             dataset, sample_vector, total_cells=ncells
         ) for _, sample_vector in simulation_vector.iterrows()
     )
-    bulk_counts = pd.concat(bulk_counts)
+    
+    bulk_counts = pd.concat([res["bulk"] for res in simulation_results])
     bulk_counts.index = [f"{scenario}_sample_{i+1}" for i in range(nsamples)]
+    
+    cell_type_expression = [res["cell_type_expression"] for res in simulation_results]
     
     return dict(
         bulk=bulk_counts,
-        proportions=simulation_vector
+        proportions=simulation_vector,
+        expression=cell_type_expression
     )
