@@ -156,7 +156,14 @@ def simulate_bulk(
         obsm=dict(prop=simulation_vector), 
         uns=dict(expr=cell_type_expression),
     )
-    simulation.obs["label"] = label
+    
+    simulation.obs = pd.DataFrame(
+        dict(
+            n_cells=n_cells,
+            label=label
+        ),
+        index=simulation.obs.index
+    )
     
     return simulation
     
