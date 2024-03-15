@@ -109,6 +109,8 @@ class SimBuDataset:
         self.variance_cutoff = variance_cutoff
         
         self.preprocess_dataset()
+        
+        self.cell_type = self.dataset.obs["cell_type"].unique().tolist()
     
     def filter_matrix(
         self,

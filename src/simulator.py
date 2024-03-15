@@ -1,6 +1,9 @@
+from itertools import chain
+from pathlib import Path
 from typing import Literal
 
 import anndata as ad
+import hdf5plugin
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
@@ -57,34 +60,32 @@ def simulate_sample(
     )
 
 
-def simulate_bulk(
+def simulate_prop(
     dataset: ad.AnnData,
     scenario: Literal["even", "random", "weighted", "custom"] = "random",
-    nsamples: int = 100,
-    ncells: int = 1000,
-    seed: int | None = None,
+    n_samples: int = 100,
     weighted_cell_type: str | None = None,
     weighted_amount: float | None = None,
     custom_scenario_dataframe: pd.DataFrame | None = None,
-    balance_even_mirror_scenario = 0.01,
-    n_jobs: int = 16,
-    verbose: int = 1
-) -> dict[str, pd.DataFrame]:
+    balance_even_mirror_scenario: float = 0.01,
+) -> list[pd.DataFrame | str]:
     all_types = np.unique(dataset.obs.cell_type.values).tolist()
     n_cell_types = len(all_types)
     simulation_vector_list = []
     if scenario == "even":
-        for _ in range(nsamples):
+        for _ in range(n_samples):
             vector = np.round(np.random.normal(loc=1.0 / n_cell_types, scale=balance_even_mirror_scenario, size=n_cell_types), 3)
             vector = vector / np.sum(vector)
             simulation_vector_list.append(vector)
-        simulation_vector = pd.DataFrame(simulation_vector_list, columns=all_types, index=[f"even_sample_{i+1}" for i in range(nsamples)])
+        simulation_vector = pd.DataFrame(simulation_vector_list, columns=all_types)
+        label = "even"
     elif scenario == "random":
-        for _ in range(nsamples):
+        for _ in range(n_samples):
             vector = np.round(np.random.uniform(0, 1, size=n_cell_types), 3)
             vector = vector / np.sum(vector)
             simulation_vector_list.append(vector)
-        simulation_vector = pd.DataFrame(simulation_vector_list, columns=all_types, index=[f"random_sample_{i+1}" for i in range(nsamples)])
+        simulation_vector = pd.DataFrame(simulation_vector_list, columns=all_types)
+        label = "random"
     elif scenario == "weighted":
         if weighted_cell_type is None or weighted_amount is None:
             raise ValueError("weighted_cell_type and weighted_amount must be provided for weighted scenario")
@@ -95,39 +96,86 @@ def simulate_bulk(
         random_cell_types = all_types.copy()
         random_cell_types.remove(weighted_cell_type)
         random_cell_types.insert(0, weighted_cell_type)
-        for _ in range(nsamples):
+        for _ in range(n_samples):
             noise =  np.random.uniform(-0.01, 0.01, size=1)
             vector = np.round(np.random.uniform(0, 1, size=n_cell_types-1), 3)
             vector = (1 - weighted_amount - noise) * vector / np.sum(vector)
             vector = np.insert(vector, 0, weighted_amount + noise) 
             simulation_vector_list.append(vector)
-        simulation_vector = pd.DataFrame(simulation_vector_list, columns=random_cell_types, index=[f"weighted_sample_{i+1}" for i in range(nsamples)])
+        simulation_vector = pd.DataFrame(simulation_vector_list, columns=random_cell_types)
+        label = f"weighted_{weighted_cell_type}_{weighted_amount}"
     elif scenario == "custom":
         if custom_scenario_dataframe is None:
             raise ValueError("custom_scenario_dataframe must be provided for custom scenario")
-        if custom_scenario_dataframe.shape[0] != nsamples:
-            raise ValueError("custom_scenario_dataframe must have the same number of rows as nsamples")
+        if custom_scenario_dataframe.shape[0] != n_samples:
+            raise ValueError("custom_scenario_dataframe must have the same number of rows as n_samples")
         if not all(custom_scenario_dataframe.columns.isin(all_types)):
             raise ValueError("Could not find all cell-types from scenario data in annotation.")
         simulation_vector = custom_scenario_dataframe
-        simulation_vector.index = [f"custom_sample_{i+1}" for i in range(nsamples)]
+        # simulation_vector.index = range(n_samples)
+        label = "custom"
     else:
         raise ValueError("Scenario must be either 'even', 'random', 'weighted', or 'custom'")  
-    # scaling_vector = np.ones(adata.shape[0])
+
+    simulation_vector.index = simulation_vector.index.astype(str)
+    return simulation_vector, label
     
+def simulate_bulk(
+    dataset: ad.AnnData,
+    scenario: Literal["even", "random", "weighted", "custom"] = "random",
+    n_samples: int = 100,
+    n_cells: int = 1000,
+    seed: int | None = None,
+    weighted_cell_type: str | None = None,
+    weighted_amount: float | None = None,
+    custom_scenario_dataframe: pd.DataFrame | None = None,
+    balance_even_mirror_scenario: float = 0.01,
+    n_jobs: int = 16,
+    verbose: int = 1
+) -> ad.AnnData:
+    simulation_vector, label = simulate_prop(
+        dataset, scenario, n_samples, 
+        weighted_cell_type, weighted_amount, 
+        custom_scenario_dataframe, 
+        balance_even_mirror_scenario
+    )
+        
     simulation_results = Parallel(n_jobs=n_jobs, verbose=verbose)(
         delayed(simulate_sample)(
-            dataset, sample_vector, total_cells=ncells
+            dataset, sample_vector, total_cells=n_cells
         ) for _, sample_vector in simulation_vector.iterrows()
     )
     
-    bulk_counts = pd.concat([res["bulk"] for res in simulation_results])
-    bulk_counts.index = [f"{scenario}_sample_{i+1}" for i in range(nsamples)]
+    bulk_counts = pd.concat([res["bulk"] for res in simulation_results], ignore_index=True)
+    bulk_counts.index = bulk_counts.index.astype(str)
     
     cell_type_expression = [res["cell_type_expression"] for res in simulation_results]
     
-    return dict(
-        bulk=bulk_counts,
-        proportions=simulation_vector,
-        expression=cell_type_expression
+    simulation = ad.AnnData(
+        X=bulk_counts, 
+        obsm=dict(prop=simulation_vector), 
+        uns=dict(expr=cell_type_expression),
+    )
+    simulation.obs["label"] = label
+    
+    return simulation
+    
+def merge_simulation(
+    simulation_list: ad.AnnData
+) -> ad.AnnData:
+    simulation = ad.concat(simulation_list)
+    simulation.obs.index = pd.Index(range(simulation.shape[0]), dtype=str)
+    simulation.uns["expr"] = list(chain.from_iterable([
+        s.uns["expr"] for s in simulation_list
+    ]))
+    
+    return simulation
+    
+def save_simulation(
+    simulation: ad.AnnData,
+    output_file: str | Path
+):
+    simulation.write_h5ad(
+        filename=output_file,
+        compression=hdf5plugin.FILTERS["zstd"]
     )
