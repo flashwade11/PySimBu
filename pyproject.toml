@@ -6,7 +6,7 @@ authors = ["Wade Huang <fastwade11@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.12"
+python = "^3.10"
 pandas = "^2.2.1"
 anndata = "^0.10.5"
 hdf5plugin = "^4.4.0"
