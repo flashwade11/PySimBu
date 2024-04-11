@@ -97,24 +97,24 @@ class SimBuDataset:
         variance_cutoff: float = 0.0,
         **kwargs,
     ):
-        self.dataset = adata
+        self.adata = adata
         self.name = name
         self.filter_genes = filter_genes
         self.variance_cutoff = variance_cutoff
 
         self.preprocess_dataset()
 
-        self.cell_type = self.dataset.obs["cell_type"].unique().tolist()
+        self.cell_type = self.adata.obs["cell_type"].unique().tolist()
 
     def filter_matrix(
         self,
     ) -> ad.AnnData:
-        genes = self.dataset.var.index.values
-        count_matrix = self.dataset.to_df()
-        if "tpm_matrix" not in self.dataset.uns.keys() or self.dataset.uns["tpm_matrix"] is None:
+        genes = self.adata.var.index.values
+        count_matrix = self.adata.to_df()
+        if "tpm_matrix" not in self.adata.uns.keys() or self.adata.uns["tpm_matrix"] is None:
             tpm_matrix = None
         else:
-            tpm_matrix = self.dataset.uns["tpm_matrix"]
+            tpm_matrix = self.adata.uns["tpm_matrix"]
 
         if self.filter_genes:
             console.print("Filtering genes...", style="bold cyan")
@@ -141,25 +141,25 @@ class SimBuDataset:
             )
         else:
             genes_to_keep = genes
-        self.dataset = self.dataset[:, genes_to_keep]
+        self.adata = self.adata[:, genes_to_keep]
 
     def preprocess_dataset(
         self,
     ):
         console.print("Preprocessing dataset...", style="bold cyan")
-        n_cells = self.dataset.shape[0]
-        cells_old = self.dataset.obs["cellname"].values
+        n_cells = self.adata.shape[0]
+        cells_old = self.adata.obs["cellname"].values
         new_ids = [f"{self.name}_{i}" for i in range(n_cells)]
 
-        self.dataset.obs = pd.DataFrame(
+        self.adata.obs = pd.DataFrame(
             dict(
                 cell_ID=new_ids,
                 cell_ID_old=cells_old,
-                cell_type=self.dataset.obs["celltype"].values,
+                cell_type=self.adata.obs["celltype"].values,
             ),
         )
-        self.dataset.obs.set_index("cell_ID", inplace=True)
-        dataset = filter_matrix(self.dataset)
+        self.adata.obs.set_index("cell_ID", inplace=True)
+        dataset = filter_matrix(self.adata)
 
         return dataset
 
