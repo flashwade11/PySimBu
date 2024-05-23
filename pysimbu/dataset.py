@@ -25,7 +25,7 @@ class SimBuDataset:
     def process_genes(
         self,
         variance_cutoff: float = 0.0,
-    ) -> ad.AnnData:
+    ):
         console.print("Filtering genes...", style="bold cyan")
 
         genes = self.adata.var.index.values
@@ -112,19 +112,23 @@ class SimBuDataset:
         anno = pd.read_csv(annotation_file, sep=sep, index_col=0)
         console.print("loading count matrix...", style="bold cyan")
         adata = (
-            ad.read_text(count_matrix_file, delimiter=sep).T
+            ad.read_text(count_matrix_file, delimiter=sep).T # type: ignore
             if transpose
-            else ad.read_text(count_matrix_file, delimiter=sep)
+            else ad.read_text(count_matrix_file, delimiter=sep) # type: ignore
         )
         adata.obs = anno
         adata.uns["tpm_matrix"] = None
         if tpm_matrix_file:
             console.print("loading tpm matrix...", style="bold cyan")
             tpm_matrix = (
-                ad.read_text(tpm_matrix_file, delimiter=sep).T.to_df()
+                ad.read_text(tpm_matrix_file, delimiter=sep).T.to_df() # type: ignore
                 if transpose
-                else ad.read_text(tpm_matrix_file, delimiter=sep).to_df()
+                else ad.read_text(tpm_matrix_file, delimiter=sep).to_df() # type: ignore
             )
             adata.uns["tpm_matrix"] = tpm_matrix
 
         return cls(adata, cellname_prefix, filter_genes, variance_cutoff)
+
+    
+    def __repr__(self) -> str:
+        return self.adata.__repr__()

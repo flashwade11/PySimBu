@@ -7,10 +7,13 @@ import hdf5plugin  # noqa: F401
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed, dump
+from scipy.sparse import issparse
 
 
 def simulate_sample(
     adata: ad.AnnData,
+    layer: str | None,
+    label_key: str,
     sample_vector: pd.Series,
     total_cells: int,
 ) -> dict[str, pd.DataFrame]:
@@ -20,7 +23,7 @@ def simulate_sample(
     cell_type_counts = (sample_vector * total_cells).round().astype(int)
     cell_type_counts = cell_type_counts.replace(0, 1)
 
-    sampled_cells_ids = [
+    sampled_cells_indices = [
         np.random.choice(
             adata.obs.index[adata.obs.cell_type == cell_type],
             size=count,
@@ -28,26 +31,25 @@ def simulate_sample(
         )
         for cell_type, count in cell_type_counts.items()
     ]
-    sampled_cells_ids = np.concatenate(sampled_cells_ids)
-    sampled_cells_adata = adata[sampled_cells_ids]
+    sampled_cell_indices = np.concatenate(sampled_cells_indices) # 
+    sampled_adata = adata[sampled_cell_indices]
 
-    sampled_cells_df = sampled_cells_adata.to_df()
-    simulated_count_vector = sampled_cells_df.sum(axis=0).to_frame().T
+    # simulate bulk
+    sampled_df = sampled_adata.to_df(layer=layer)
+    simulated_bulk_count = sampled_df.sum(axis=0).to_frame().T
 
-    sampled_cell_type = adata.obs.loc[sampled_cells_ids, "cell_type"].to_dict()
-    simulated_cell_type_expression = (
-        sampled_cells_df.reset_index()
-        .replace({"cell_ID": sampled_cell_type})
-        .rename(columns={"cell_ID": "cell_type"})
-        .groupby("cell_type")
-        .sum()
-    )
+    # simulate cell type expression
+    sampled_ct_mapping = sampled_adata.obs[label_key].to_dict()
+    sampled_df.index = sampled_df.index.map(sampled_ct_mapping)
+    sampled_df.index.name = "cell_type"
+    simulated_ct_expression = sampled_df.groupby("cell_type").sum()
 
-    return {"bulk": simulated_count_vector, "cell_type_expression": simulated_cell_type_expression}
+    return {"bulk": simulated_bulk_count, "cell_type_expression": simulated_ct_expression}
 
 
 def simulate_prop(
     adata: ad.AnnData,
+    label_key:str = "cell_type",
     scenario: Literal["even", "random", "weighted", "custom"] = "random",
     n_samples: int = 100,
     weighted_cell_type: str | None = None,
@@ -55,8 +57,8 @@ def simulate_prop(
     custom_scenario_dataframe: pd.DataFrame | None = None,
     balance_even_mirror_scenario: float = 0.01,
 ) -> tuple[pd.DataFrame, str]:
-    all_types = np.unique(adata.obs.cell_type.values).tolist()
-    n_cell_types = len(all_types)
+    cell_types = adata.obs[label_key].unique().tolist()
+    n_cell_types = len(cell_types)
     simulation_vector_list = []
     if scenario == "even":
         for _ in range(n_samples):
@@ -70,23 +72,23 @@ def simulate_prop(
             )
             vector = vector / np.sum(vector)
             simulation_vector_list.append(vector)
-        simulation_vector = pd.DataFrame(simulation_vector_list, columns=all_types)
+        simulation_vector = pd.DataFrame(simulation_vector_list, columns=cell_types)
         label = "even"
     elif scenario == "random":
         for _ in range(n_samples):
             vector = np.round(np.random.uniform(0, 1, size=n_cell_types), 3)
             vector = vector / np.sum(vector)
             simulation_vector_list.append(vector)
-        simulation_vector = pd.DataFrame(simulation_vector_list, columns=all_types)
+        simulation_vector = pd.DataFrame(simulation_vector_list, columns=cell_types)
         label = "random"
     elif scenario == "weighted":
         if weighted_cell_type is None or weighted_amount is None:
             raise ValueError("weighted_cell_type and weighted_amount must be provided for weighted scenario")
         if weighted_amount > 0.99 or weighted_amount < 0:
             raise ValueError("weighted_amount must be between 0 and 0.99")
-        if weighted_cell_type not in all_types:
-            raise ValueError(f"weighted_cell_type must be one of {all_types}")
-        random_cell_types = all_types.copy()
+        if weighted_cell_type not in cell_types:
+            raise ValueError(f"weighted_cell_type must be one of {cell_types}")
+        random_cell_types = cell_types.copy()
         random_cell_types.remove(weighted_cell_type)
         random_cell_types.insert(0, weighted_cell_type)
         for _ in range(n_samples):
@@ -102,7 +104,7 @@ def simulate_prop(
             raise ValueError("custom_scenario_dataframe must be provided for custom scenario")
         if custom_scenario_dataframe.shape[0] != n_samples:
             raise ValueError("custom_scenario_dataframe must have the same number of rows as n_samples")
-        if not all(custom_scenario_dataframe.columns.isin(all_types)):
+        if not all(custom_scenario_dataframe.columns.isin(cell_types)):
             raise ValueError("Could not find all cell-types from scenario data in annotation.")
         simulation_vector = custom_scenario_dataframe
         label = "custom"
@@ -115,6 +117,8 @@ def simulate_prop(
 
 def simulate_bulk(
     adata: ad.AnnData,
+    layer: str | None = None,
+    label_key: str = "cell_type",
     scenario: Literal["even", "random", "weighted", "custom"] = "random",
     n_samples: int = 100,
     n_cells: int = 1000,
@@ -125,8 +129,15 @@ def simulate_bulk(
     n_jobs: int = 16,
     verbose: int = 1,
 ) -> ad.AnnData:
+    if label_key not in adata.obs.columns:
+        raise ValueError(f"There is no column `{label_key}` in the adata.obs dataframe, please check your label_key.")
+    
+    if layer not in adata.layers.keys():
+        raise ValueError(f"There is no layer `{layer}` in the adata.layers, please check your layer.")
+    
     simulation_vector, label = simulate_prop(
         adata,
+        label_key,
         scenario,
         n_samples,
         weighted_cell_type,
@@ -136,17 +147,17 @@ def simulate_bulk(
     )
 
     simulation_results = Parallel(n_jobs=n_jobs, verbose=verbose)(
-        delayed(simulate_sample)(adata, sample_vector, total_cells=n_cells)
+        delayed(simulate_sample)(adata, layer, label_key, sample_vector, total_cells=n_cells)
         for _, sample_vector in simulation_vector.iterrows()
     )
 
-    bulk_counts = pd.concat([res["bulk"] for res in simulation_results], ignore_index=True)
+    bulk_counts = pd.concat([res["bulk"] for res in simulation_results], ignore_index=True) # type: ignore
     bulk_counts.index = bulk_counts.index.astype(str)
 
-    cell_type_expression = [res["cell_type_expression"] for res in simulation_results]
+    cell_type_expression = [res["cell_type_expression"] for res in simulation_results] # type: ignore
     simulation = ad.AnnData(
         X=bulk_counts,
-        obsm=dict(prop=simulation_vector),
+        obsm=dict(prop=simulation_vector), # type: ignore
         uns=dict(expr=cell_type_expression),
     )
     simulation.obs = pd.DataFrame(
@@ -157,11 +168,10 @@ def simulate_bulk(
     return simulation
 
 
-def merge_simulation(simulation_list: ad.AnnData) -> ad.AnnData:
+def merge_simulation(simulation_list: list[ad.AnnData]) -> ad.AnnData:
     simulation = ad.concat(simulation_list)
     simulation.obs.index = pd.Index(range(simulation.shape[0]), dtype=str)
     simulation.uns["expr"] = list(chain.from_iterable([s.uns["expr"] for s in simulation_list]))
-
     return simulation
 
 
