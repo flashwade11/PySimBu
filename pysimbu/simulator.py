@@ -72,14 +72,12 @@ def simulate_prop(
             vector = vector / np.sum(vector)
             simulation_vector_list.append(vector)
         simulation_vector = pd.DataFrame(simulation_vector_list, columns=cell_types)
-        simulation_label = "even"
     elif scenario == "random":
         for _ in range(n_samples):
             vector = np.round(np.random.uniform(0, 1, size=n_cell_types), 3)
             vector = vector / np.sum(vector)
             simulation_vector_list.append(vector)
         simulation_vector = pd.DataFrame(simulation_vector_list, columns=cell_types)
-        simulation_label = "random"
     elif scenario == "weighted":
         if weighted_cell_type is None or weighted_amount is None:
             raise ValueError("weighted_cell_type and weighted_amount must be provided for weighted scenario")
@@ -97,7 +95,6 @@ def simulate_prop(
             vector = np.insert(vector, 0, weighted_amount + noise)
             simulation_vector_list.append(vector)
         simulation_vector = pd.DataFrame(simulation_vector_list, columns=random_cell_types)
-        simulation_label = f"weighted_{weighted_cell_type}_{weighted_amount}"
     elif scenario == "custom":
         if custom_scenario_dataframe is None:
             raise ValueError("custom_scenario_dataframe must be provided for custom scenario")
@@ -106,12 +103,12 @@ def simulate_prop(
         if not all(custom_scenario_dataframe.columns.isin(cell_types)):
             raise ValueError("Could not find all cell-types from scenario data in annotation.")
         simulation_vector = custom_scenario_dataframe
-        simulation_label = "custom"
     else:
         raise ValueError("Scenario must be either 'even', 'random', 'weighted', or 'custom'")
 
     simulation_vector.index = simulation_vector.index.astype(str)
-    return simulation_vector, simulation_label
+    simulation_vector = simulation_vector.reindex(columns=sorted(simulation_vector.columns))
+    return simulation_vector
 
 
 def simulate_bulk(
@@ -142,7 +139,7 @@ def simulate_bulk(
     else:
         raise ValueError("n_cells must be either an integer or a list of integers with the same length as n_samples.")
     
-    simulation_vector, simulation_label = simulate_prop(
+    simulation_vector = simulate_prop(
         adata,
         label_key,
         scenario,
@@ -167,10 +164,7 @@ def simulate_bulk(
         obsm=dict(prop=simulation_vector), # type: ignore
         uns=dict(expr=cell_type_expression),
     )
-    # simulation.obs = pd.DataFrame(
-    #     dict(n_cells=n_cells, simulation_label=simulation_label),
-    #     index=simulation.obs.index,
-    # )
+
     return simulation
 
 
